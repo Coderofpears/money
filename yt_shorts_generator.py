@@ -34,6 +34,17 @@ CONTENT_TYPE_GUIDES = {
     "funny_reddit": "Use comedic Reddit content with punchlines and relatable social awkwardness.",
 }
 
+CONTENT_TYPE_ALIASES = {
+    "roblox-rant": "roblox_rant",
+    "reddit-stories": "reddit_story",
+    "reddit_story": "reddit_story",
+    "hypotheticalscenerios": "hypothetical",
+    "hypotheticalscenarios": "hypothetical",
+    "hypothetical-scenarios": "hypothetical",
+    "funny_reddit_posts": "funny_reddit",
+    "funny-reddit": "funny_reddit",
+}
+
 DEFAULT_SUBREDDITS = {
     "reddit_story": ["AmItheAsshole", "tifu", "offmychest", "TrueOffMyChest"],
     "hypothetical": ["hypotheticalsituation", "hypothetical", "whatif"],
@@ -46,6 +57,12 @@ FALLBACK_REDDIT_SEEDS = {
     "funny_reddit": "Someone confidently waved back at a stranger for 2 minutes, then realized it was not for them.",
 }
 
+
+
+
+def normalize_content_type(content_type: str) -> str:
+    key = (content_type or "general").strip().lower()
+    return CONTENT_TYPE_ALIASES.get(key, key)
 
 class GeneratedPlan(BaseModel):
     title: str
@@ -150,6 +167,8 @@ def fetch_reddit_post(subreddit: str, sort: str = "hot") -> SourceMaterial:
 
 
 def get_source_material(content_type: str, topic: str, subreddit: Optional[str] = None) -> SourceMaterial:
+    content_type = normalize_content_type(content_type)
+
     if content_type == "general":
         return SourceMaterial(title=topic, body=topic)
 
@@ -233,6 +252,7 @@ def generate_plan(
     if video_type not in VIDEO_TYPE_GUIDES:
         raise ValueError(f"Unsupported video type: {video_type}. Use one of: {', '.join(VIDEO_TYPE_GUIDES.keys())}")
 
+    content_type = normalize_content_type(content_type)
     if content_type not in CONTENT_TYPE_GUIDES:
         raise ValueError(f"Unsupported content type: {content_type}. Use one of: {', '.join(CONTENT_TYPE_GUIDES.keys())}")
 
@@ -417,7 +437,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_generate = sub.add_parser("generate", help="Generate a shorts plan")
     p_generate.add_argument("--topic", required=True)
     p_generate.add_argument("--video-type", required=True, choices=list(VIDEO_TYPE_GUIDES.keys()))
-    p_generate.add_argument("--content-type", default="general", choices=list(CONTENT_TYPE_GUIDES.keys()))
+    p_generate.add_argument("--content-type", default="general", help="Content source type (e.g. general, roblox_rant, reddit_story, hypothetical, funny_reddit)")
     p_generate.add_argument("--subreddit", help="Optional subreddit override for reddit-based content types")
     p_generate.add_argument("--duration", type=int, default=30)
     p_generate.add_argument("--analysis-file", help="Optional analysis JSON")
@@ -432,7 +452,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_full = sub.add_parser("full", help="Analyze (optional), generate, and render in one command")
     p_full.add_argument("--topic", required=True)
     p_full.add_argument("--video-type", required=True, choices=list(VIDEO_TYPE_GUIDES.keys()))
-    p_full.add_argument("--content-type", default="general", choices=list(CONTENT_TYPE_GUIDES.keys()))
+    p_full.add_argument("--content-type", default="general", help="Content source type (e.g. general, roblox_rant, reddit_story, hypothetical, funny_reddit)")
     p_full.add_argument("--subreddit", help="Optional subreddit override for reddit-based content types")
     p_full.add_argument("--duration", type=int, default=30)
     p_full.add_argument("--reference-url", help="Optional reference URL to mimic style")
