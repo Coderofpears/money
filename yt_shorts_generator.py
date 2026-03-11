@@ -335,6 +335,16 @@ def render_video(plan: GeneratedPlan, output_path: str) -> None:
     else:
         duration = 12
         audio_clip = make_silent_audio(duration)
+def render_video(plan: GeneratedPlan, output_path: str) -> None:
+    width, height = 1080, 1920
+
+    narration_text = " ".join([plan.hook, plan.script, plan.cta])
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as audio_tmp:
+        audio_path = audio_tmp.name
+
+    gTTS(text=narration_text, lang="en").save(audio_path)
+    audio_clip = AudioFileClip(audio_path)
+    duration = min(max(audio_clip.duration, 8), 60)
 
     bg = ColorClip(size=(width, height), color=(20, 20, 20)).set_duration(duration)
 
