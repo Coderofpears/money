@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import numpy as np
+
 from gtts import gTTS
 from groq import Groq
-from moviepy import AudioFileClip, ColorClip, CompositeVideoClip, TextClip
+from moviepy import AudioClip, AudioFileClip, ColorClip, CompositeVideoClip, TextClip
 from pydantic import BaseModel, Field
 import requests
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -63,6 +65,18 @@ FALLBACK_REDDIT_SEEDS = {
 def normalize_content_type(content_type: str) -> str:
     key = (content_type or "general").strip().lower()
     return CONTENT_TYPE_ALIASES.get(key, key)
+
+
+def parse_json_response(text: str) -> Dict[str, Any]:
+    text = (text or "").strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not match:
+            raise
+        return json.loads(match.group(0))
+
 
 class GeneratedPlan(BaseModel):
     title: str
@@ -141,7 +155,7 @@ def call_groq_json(system_prompt: str, user_prompt: str, model: str = "llama-3.1
     )
 
     text = completion.choices[0].message.content
-    return json.loads(text)
+    return parse_json_response(text)
 
 
 def fetch_reddit_post(subreddit: str, sort: str = "hot") -> SourceMaterial:
@@ -295,16 +309,32 @@ def generate_plan(
     return GeneratedPlan.model_validate(response)
 
 
+
+def synthesize_voiceover_to_file(text: str, audio_path: str) -> bool:
+    try:
+        gTTS(text=text, lang="en").save(audio_path)
+        return True
+    except Exception:
+        return False
+
+
+def make_silent_audio(duration: float) -> AudioClip:
+    return AudioClip(lambda t: np.zeros_like(t, dtype=float), duration=duration, fps=44100)
+
 def render_video(plan: GeneratedPlan, output_path: str) -> None:
     width, height = 1080, 1920
 
-    narration_text = " ".join([plan.hook, plan.script, plan.cta])
+    narration_text = " ".join([plan.hook, plan.script, plan.cta]).strip() or "Generated short video"
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as audio_tmp:
         audio_path = audio_tmp.name
 
-    gTTS(text=narration_text, lang="en").save(audio_path)
-    audio_clip = AudioFileClip(audio_path)
-    duration = min(max(audio_clip.duration, 8), 60)
+    has_tts_audio = synthesize_voiceover_to_file(narration_text, audio_path)
+    if has_tts_audio:
+        audio_clip = AudioFileClip(audio_path)
+        duration = min(max(audio_clip.duration, 8), 60)
+    else:
+        duration = 12
+        audio_clip = make_silent_audio(duration)
 
     bg = ColorClip(size=(width, height), color=(20, 20, 20)).set_duration(duration)
 
@@ -352,6 +382,9 @@ def render_video(plan: GeneratedPlan, output_path: str) -> None:
 
     final = CompositeVideoClip([bg, hook_clip, body_clip, cta_clip]).set_audio(audio_clip)
     final.write_videofile(output_path, fps=30, codec="libx264", audio_codec="aac")
+
+    final.close()
+    audio_clip.close()
 
     try:
         os.remove(audio_path)

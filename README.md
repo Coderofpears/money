@@ -26,7 +26,7 @@ It can also **analyze a reference YouTube video** (like your provided URL) by pu
   - `general` (normal topic)
   - `roblox_rant`
   - `reddit_story` (from subreddit posts)
-  - `hypothetical` (from hypothetical scenario subreddits)
+  - `hypothetical` (from hypothetical scenario subreddits; aliases like `hypotheticalscenerios` are accepted)
   - `funny_reddit` (from funny subreddit posts)
 - Auto video rendering pipeline:
   - voiceover via TTS (`gTTS`)
@@ -120,5 +120,6 @@ python yt_shorts_generator.py full \
 ## Notes
 
 - If transcript extraction fails for a video, generation still works without analysis data.
+- If `gTTS` fails (network/rate limits), renderer falls back to silent audio so MP4 export still succeeds.
 - You can customize prompts in `yt_shorts_generator.py` for your niche and language.
 - For better visuals, replace the basic background generator with b-roll APIs or local clips.
