@@ -6,7 +6,7 @@ import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -60,6 +60,19 @@ FALLBACK_REDDIT_SEEDS = {
 }
 
 
+
+
+ASSETS_ROOT = Path("assets")
+ASSET_DIRS = {
+    "root": ASSETS_ROOT,
+    "backgrounds": ASSETS_ROOT / "backgrounds",
+    "music": ASSETS_ROOT / "music",
+    "outputs": ASSETS_ROOT / "outputs",
+    "plans": ASSETS_ROOT / "plans",
+    "analysis": ASSETS_ROOT / "analysis",
+}
+
+REDDIT_SORT_MODES = ["hot", "new", "top_day", "top_week", "top_month", "top_year", "top_all"]
 
 
 def normalize_content_type(content_type: str) -> str:
@@ -158,10 +171,43 @@ def call_groq_json(system_prompt: str, user_prompt: str, model: str = "llama-3.1
     return parse_json_response(text)
 
 
-def fetch_reddit_post(subreddit: str, sort: str = "hot") -> SourceMaterial:
-    url = f"https://www.reddit.com/r/{subreddit}/{sort}.json?limit=15"
-    headers = {"User-Agent": "yt-shorts-generator/1.0"}
-    response = requests.get(url, headers=headers, timeout=15)
+def ensure_assets_structure(base_dir: Path = ASSETS_ROOT) -> Dict[str, Path]:
+    dirs = {
+        "root": base_dir,
+        "backgrounds": base_dir / "backgrounds",
+        "music": base_dir / "music",
+        "outputs": base_dir / "outputs",
+        "plans": base_dir / "plans",
+        "analysis": base_dir / "analysis",
+    }
+    for path in dirs.values():
+        path.mkdir(parents=True, exist_ok=True)
+    return dirs
+
+
+def _reddit_sort_to_endpoint(sort: str) -> Tuple[str, Optional[str]]:
+    sort = (sort or "hot").strip().lower()
+    mapping = {
+        "hot": ("hot", None),
+        "new": ("new", None),
+        "top_day": ("top", "day"),
+        "top_week": ("top", "week"),
+        "top_month": ("top", "month"),
+        "top_year": ("top", "year"),
+        "top_all": ("top", "all"),
+    }
+    return mapping.get(sort, ("hot", None))
+
+
+def fetch_reddit_post(subreddit: str, sort: str = "hot", limit: int = 20) -> SourceMaterial:
+    listing, timeframe = _reddit_sort_to_endpoint(sort)
+    url = f"https://www.reddit.com/r/{subreddit}/{listing}.json"
+    headers = {"User-Agent": "yt-shorts-generator/2.0 (web-ui)"}
+    params: Dict[str, Any] = {"limit": max(1, min(limit, 100)), "raw_json": 1}
+    if timeframe:
+        params["t"] = timeframe
+
+    response = requests.get(url, headers=headers, params=params, timeout=20)
     response.raise_for_status()
     payload = response.json()
 
@@ -177,10 +223,10 @@ def fetch_reddit_post(subreddit: str, sort: str = "hot") -> SourceMaterial:
         full_url = f"https://reddit.com{permalink}" if permalink else None
         return SourceMaterial(title=title, body=body[:3000], subreddit=subreddit, url=full_url)
 
-    raise ValueError(f"No suitable posts found in r/{subreddit}")
+    raise ValueError(f"No suitable posts found in r/{subreddit} ({sort})")
 
 
-def get_source_material(content_type: str, topic: str, subreddit: Optional[str] = None) -> SourceMaterial:
+def get_source_material(content_type: str, topic: str, subreddit: Optional[str] = None, reddit_sort: str = "hot") -> SourceMaterial:
     content_type = normalize_content_type(content_type)
 
     if content_type == "general":
@@ -198,7 +244,7 @@ def get_source_material(content_type: str, topic: str, subreddit: Optional[str] 
         last_error = None
         for sub in picks:
             try:
-                return fetch_reddit_post(sub)
+                return fetch_reddit_post(sub, sort=reddit_sort)
             except Exception as exc:
                 last_error = exc
                 continue
@@ -262,6 +308,7 @@ def generate_plan(
     analysis: Optional[VideoAnalysis] = None,
     content_type: str = "general",
     subreddit: Optional[str] = None,
+    reddit_sort: str = "hot",
 ) -> GeneratedPlan:
     if video_type not in VIDEO_TYPE_GUIDES:
         raise ValueError(f"Unsupported video type: {video_type}. Use one of: {', '.join(VIDEO_TYPE_GUIDES.keys())}")
@@ -270,7 +317,7 @@ def generate_plan(
     if content_type not in CONTENT_TYPE_GUIDES:
         raise ValueError(f"Unsupported content type: {content_type}. Use one of: {', '.join(CONTENT_TYPE_GUIDES.keys())}")
 
-    source = get_source_material(content_type, topic, subreddit)
+    source = get_source_material(content_type, topic, subreddit, reddit_sort=reddit_sort)
 
     analysis_block = "No reference analysis provided."
     if analysis:
@@ -335,16 +382,6 @@ def render_video(plan: GeneratedPlan, output_path: str) -> None:
     else:
         duration = 12
         audio_clip = make_silent_audio(duration)
-def render_video(plan: GeneratedPlan, output_path: str) -> None:
-    width, height = 1080, 1920
-
-    narration_text = " ".join([plan.hook, plan.script, plan.cta])
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as audio_tmp:
-        audio_path = audio_tmp.name
-
-    gTTS(text=narration_text, lang="en").save(audio_path)
-    audio_clip = AudioFileClip(audio_path)
-    duration = min(max(audio_clip.duration, 8), 60)
 
     bg = ColorClip(size=(width, height), color=(20, 20, 20)).set_duration(duration)
 
@@ -391,15 +428,15 @@ def render_video(plan: GeneratedPlan, output_path: str) -> None:
     )
 
     final = CompositeVideoClip([bg, hook_clip, body_clip, cta_clip]).set_audio(audio_clip)
-    final.write_videofile(output_path, fps=30, codec="libx264", audio_codec="aac")
-
-    final.close()
-    audio_clip.close()
-
     try:
-        os.remove(audio_path)
-    except OSError:
-        pass
+        final.write_videofile(output_path, fps=30, codec="libx264", audio_codec="aac")
+    finally:
+        final.close()
+        audio_clip.close()
+        try:
+            os.remove(audio_path)
+        except OSError:
+            pass
 
 
 def save_json(path: str, data: Dict[str, Any]) -> None:
@@ -434,6 +471,7 @@ def cmd_generate(args: argparse.Namespace) -> None:
         analysis,
         content_type=args.content_type,
         subreddit=args.subreddit,
+        reddit_sort=args.reddit_sort,
     )
     save_json(args.out, plan.model_dump())
     print(f"Saved plan to {args.out}")
@@ -457,6 +495,7 @@ def cmd_full(args: argparse.Namespace) -> None:
         analysis,
         content_type=args.content_type,
         subreddit=args.subreddit,
+        reddit_sort=args.reddit_sort,
     )
     render_video(plan, args.out)
 
@@ -468,9 +507,144 @@ def cmd_full(args: argparse.Namespace) -> None:
     print(f"Rendered video to {args.out}")
 
 
+
+
+def run_full_pipeline(
+    topic: str,
+    video_type: str,
+    content_type: str,
+    duration: int,
+    subreddit: Optional[str] = None,
+    reddit_sort: str = "hot",
+    reference_url: Optional[str] = None,
+    output_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    ensure_assets_structure()
+
+    analysis = analyze_reference_video(reference_url) if reference_url else None
+    plan = generate_plan(
+        topic=topic,
+        video_type=video_type,
+        duration_sec=duration,
+        analysis=analysis,
+        content_type=content_type,
+        subreddit=subreddit,
+        reddit_sort=reddit_sort,
+    )
+
+    if not output_path:
+        stamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = str((ASSETS_ROOT / "outputs" / f"short_{stamp}.mp4").resolve())
+
+    render_video(plan, output_path)
+
+    base = Path(output_path).with_suffix("")
+    plan_path = f"{base}_plan.json"
+    save_json(plan_path, plan.model_dump())
+
+    analysis_path = None
+    if analysis:
+        analysis_path = f"{base}_analysis.json"
+        save_json(analysis_path, analysis.__dict__)
+
+    return {
+        "output": output_path,
+        "plan": plan_path,
+        "analysis": analysis_path,
+        "title": plan.title,
+    }
+
+
+def create_web_app():
+    from flask import Flask, request, render_template_string
+
+    ensure_assets_structure()
+    app = Flask(__name__)
+
+    template = """
+<!doctype html>
+<html><head><meta charset='utf-8'><title>YT Shorts Generator</title>
+<style>body{font-family:Arial;max-width:900px;margin:20px auto;padding:0 16px}label{display:block;margin:10px 0 4px}input,select{width:100%;padding:8px}button{margin-top:16px;padding:10px 14px}pre{background:#f5f5f5;padding:12px;overflow:auto}</style>
+</head><body>
+<h2>YouTube Shorts Generator (Local)</h2>
+<p>Assets folder: <code>{{assets}}</code>. Put optional background/music files there.</p>
+<form method='post'>
+<label>Topic</label><input name='topic' value='{{form.topic}}' required>
+<label>Video Type</label><select name='video_type'>{% for v in video_types %}<option value='{{v}}' {% if form.video_type==v %}selected{% endif %}>{{v}}</option>{% endfor %}</select>
+<label>Content Type</label><select name='content_type'>{% for c in content_types %}<option value='{{c}}' {% if form.content_type==c %}selected{% endif %}>{{c}}</option>{% endfor %}</select>
+<label>Subreddit (optional)</label><input name='subreddit' value='{{form.subreddit}}'>
+<label>Reddit Sort (.json style)</label><select name='reddit_sort'>{% for s in reddit_sorts %}<option value='{{s}}' {% if form.reddit_sort==s %}selected{% endif %}>{{s}}</option>{% endfor %}</select>
+<label>Duration (seconds)</label><input type='number' min='8' max='60' name='duration' value='{{form.duration}}'>
+<label>Reference URL (optional)</label><input name='reference_url' value='{{form.reference_url}}'>
+<label>Output filename (optional, inside assets/outputs)</label><input name='output_name' value='{{form.output_name}}' placeholder='my_short.mp4'>
+<button type='submit'>Generate Video</button>
+</form>
+{% if error %}<p style='color:#b00'><b>Error:</b> {{error}}</p>{% endif %}
+{% if result %}<h3>Done</h3><pre>{{result}}</pre>{% endif %}
+</body></html>
+"""
+
+    @app.route("/", methods=["GET", "POST"])
+    def index():
+        form = {
+            "topic": request.form.get("topic", "funniest awkward social moment"),
+            "video_type": request.form.get("video_type", "story"),
+            "content_type": request.form.get("content_type", "funny_reddit"),
+            "subreddit": request.form.get("subreddit", "AskReddit"),
+            "reddit_sort": request.form.get("reddit_sort", "hot"),
+            "duration": request.form.get("duration", "30"),
+            "reference_url": request.form.get("reference_url", ""),
+            "output_name": request.form.get("output_name", ""),
+        }
+        error = None
+        result = None
+
+        if request.method == "POST":
+            try:
+                output_name = form["output_name"].strip()
+                output_path = None
+                if output_name:
+                    safe_name = Path(output_name).name
+                    if not safe_name.endswith(".mp4"):
+                        safe_name += ".mp4"
+                    output_path = str((ASSETS_ROOT / "outputs" / safe_name).resolve())
+
+                out = run_full_pipeline(
+                    topic=form["topic"],
+                    video_type=form["video_type"],
+                    content_type=form["content_type"],
+                    duration=int(form["duration"]),
+                    subreddit=form["subreddit"].strip() or None,
+                    reddit_sort=form["reddit_sort"],
+                    reference_url=form["reference_url"].strip() or None,
+                    output_path=output_path,
+                )
+                result = json.dumps(out, indent=2)
+            except Exception as exc:
+                error = str(exc)
+
+        return render_template_string(
+            template,
+            assets=str(ASSETS_ROOT.resolve()),
+            video_types=list(VIDEO_TYPE_GUIDES.keys()),
+            content_types=list(CONTENT_TYPE_GUIDES.keys()),
+            reddit_sorts=REDDIT_SORT_MODES,
+            form=form,
+            error=error,
+            result=result,
+        )
+
+    return app
+
+
+def cmd_serve(args: argparse.Namespace) -> None:
+    app = create_web_app()
+    print(f"Starting web UI at http://{args.host}:{args.port}")
+    app.run(host=args.host, port=args.port, debug=False)
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AI-powered YouTube Shorts generator using Groq")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
 
     p_analyze = sub.add_parser("analyze", help="Analyze a reference YouTube video")
     p_analyze.add_argument("--url", required=True, help="YouTube video/short URL")
@@ -482,6 +656,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_generate.add_argument("--video-type", required=True, choices=list(VIDEO_TYPE_GUIDES.keys()))
     p_generate.add_argument("--content-type", default="general", help="Content source type (e.g. general, roblox_rant, reddit_story, hypothetical, funny_reddit)")
     p_generate.add_argument("--subreddit", help="Optional subreddit override for reddit-based content types")
+    p_generate.add_argument("--reddit-sort", default="hot", choices=REDDIT_SORT_MODES, help="Reddit listing mode (.json endpoint style)")
     p_generate.add_argument("--duration", type=int, default=30)
     p_generate.add_argument("--analysis-file", help="Optional analysis JSON")
     p_generate.add_argument("--out", required=True)
@@ -497,17 +672,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_full.add_argument("--video-type", required=True, choices=list(VIDEO_TYPE_GUIDES.keys()))
     p_full.add_argument("--content-type", default="general", help="Content source type (e.g. general, roblox_rant, reddit_story, hypothetical, funny_reddit)")
     p_full.add_argument("--subreddit", help="Optional subreddit override for reddit-based content types")
+    p_full.add_argument("--reddit-sort", default="hot", choices=REDDIT_SORT_MODES, help="Reddit listing mode (.json endpoint style)")
     p_full.add_argument("--duration", type=int, default=30)
     p_full.add_argument("--reference-url", help="Optional reference URL to mimic style")
     p_full.add_argument("--out", required=True)
     p_full.set_defaults(func=cmd_full)
 
+    p_serve = sub.add_parser("serve", help="Start local web UI on localhost")
+    p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve.add_argument("--port", type=int, default=7777)
+    p_serve.set_defaults(func=cmd_serve)
+
     return parser
 
 
 def main() -> None:
+    ensure_assets_structure()
     parser = build_parser()
     args = parser.parse_args()
+
+    if not getattr(args, "command", None):
+        cmd_serve(argparse.Namespace(host="127.0.0.1", port=7777))
+        return
+
     args.func(args)
 
 

@@ -6,6 +6,9 @@ It can also **analyze a reference YouTube video** (like your provided URL) by pu
 
 ## Features
 
+- Local-first workflow with automatic `assets/` folder setup (no Google Drive dependency).
+- Built-in web UI on `http://localhost:7777` for setting params and running generation.
+- Reddit `.json` scraping modes (`hot`, `new`, `top_week`, etc.) for reddit-based content types.
 - Groq-powered generation of:
   - hook
   - scene-by-scene script
@@ -112,6 +115,7 @@ python yt_shorts_generator.py full \
   --video-type story \
   --content-type funny_reddit \
   --subreddit AskReddit \
+  --reddit-sort top_week \
   --duration 30 \
   --reference-url "https://www.youtube.com/shorts/jyX8fMA5gF8" \
   --out output_short.mp4
@@ -123,3 +127,27 @@ python yt_shorts_generator.py full \
 - If `gTTS` fails (network/rate limits), renderer falls back to silent audio so MP4 export still succeeds.
 - You can customize prompts in `yt_shorts_generator.py` for your niche and language.
 - For better visuals, replace the basic background generator with b-roll APIs or local clips.
+
+
+## Local Web UI (default)
+
+Run with no arguments to launch the interface:
+
+```bash
+python yt_shorts_generator.py
+```
+
+This starts the app on `http://127.0.0.1:7777` and creates:
+
+- `assets/backgrounds`
+- `assets/music`
+- `assets/outputs`
+- `assets/plans`
+- `assets/analysis`
+
+You can also run explicitly:
+
+```bash
+python yt_shorts_generator.py serve --host 127.0.0.1 --port 7777
+```
+
